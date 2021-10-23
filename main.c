@@ -2,8 +2,8 @@
  * File:   main.c
  * Author: 佐々木翔
  *
- * Created on 2021/06/29, 17:10
- * Discription　実装試験の熱制御系のプログラム
+ * Created on 2021/09/08, 17:51
+ * Discription　実装試験のコマンド系のプログラム
  * 編集履歴
  * 2021/10/18：タイマーの実装
  * 
@@ -14,7 +14,7 @@
 #include <stdlib.h>
 #include "spi.h"
 #include "MCP2515.h"
-#include "TCS.h"
+#include "C.h"
 
 // CONFIG1
 #pragma config FOSC  = HS        // Oscillator Selection bits (HS oscillator: High-speed crystal/resonator on RA6/OSC2/CLKOUT and RA7/OSC1/CLKIN)
@@ -38,7 +38,6 @@
 #define _XTAL_FREQ      20000000
 #define _CAN_BAUDRATE   2
 
-
 /*--Prtotype--*/
 void CONFIG();                                                                  //初期設定
 void timer_init();                                                             //タイマーの初期設定
@@ -53,260 +52,80 @@ volatile char rx_int;                                                           
 volatile char data[8] = {2, 2, 2, 2, 2, 2, 2, 2};                               //HKデータ
 volatile char mode = _ChargeMode;                                               //モードフラグ（初期モード：充電モード）
 volatile char size;                                                             //データ長
-volatile int cnt = 0;                                                           //コンペアマッチ用のカウンタ0
-volatile int cnt1 = 0;                                                           //コンペアマッチ用のカウンタ1
-
+volatile int cnt = 0;                                                           //コンペアマッチ用の変数
 
 void main(void)
-{
+{   
     CONFIG();                                                                   //初期設定
     __delay_ms(100);
+    
+    RB5 = 0;
+    RB6 = 0;
+    RB7 = 1;
     
     T1CONbits.TMR1ON = 1;                                                       //タイマー開始
     
     while(1)
-    {
-        /* モード遷移処理 */
-        rx_int = Read(_CANINTF);                                                //割り込みフラグ
-        
-        if((rx_int & _Flagbit0) == 0b00000001)
-        {   
-            rx_data = Read_RX_ID(_F_RXB0SIDH, 13);
-            Write(_CANINTF, 0b00000000);
-            
-            if(rx_data[3] == SIDH_MODE)                                         //モード情報かを確認
-            {
-                if((rx_data[5] & _ChargeMode) == 0b00000001)                    //充電モードに移行
-                {
-                    RB5 = 0;
-                    RB6 = 0;
-                    RB7 = 1;
-                    mode = _ChargeMode;
-                }
-            
-                if((rx_data[5] & _COMMMode) == 0b00000010)                  //ダウンリンクモードに移行
-                {
-                    RB5 = 0;
-                    RB6 = 1;
-                    RB7 = 0;
-                    mode = _COMMMode;
-                }
-            
-                if((rx_data[5] & _StanbyMode) == 0b00000011)                    //待機モードに移行
-                {
-                    RB5 = 1;
-                    RB6 = 0; 
-                    RB7 = 0;
-                    mode = _StanbyMode;
-                }
-            
-                if((rx_data[5] & _MissionMode) == 0b00000100)                   //ミッションモードに移行
-                {
-                    RB5 = 0;
-                    RB6 = 0; 
-                    RB7 = 0;
-                    mode = _MissionMode;
-                }
-            }
-        }
-        
-        
-        /* 充電モード */
-        if(mode == _ChargeMode)
+    {       
+        if(cnt == 0)
         {
-            if(cnt >= 10)
-            {
-                Write(_TXB0DLC , 0b00000001);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_MODE, SIDL_R, 0, 0);                   //モードフラグ読み出し
-                Load_TX_Data(_F_TXB0D0, 1, 0);                                      //読み出しだから，1byteの空データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00000001);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_MODE, SIDL_W, EID8_MODE, EID0_MODE);   //モード書き込みIDの設定
-                Load_TX_Data(_F_TXB0D0, 1, &mode);                                  //モード書き込み
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA1, SIDL_W, EID8_DATA1, EID0_DATA1);//バッテリーの温度値書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA2, SIDL_W, EID8_DATA2, EID0_DATA2);//メモリの温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA3, SIDL_W, EID8_DATA3, EID0_DATA3); //姿勢センサの温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA4, SIDL_W, EID8_DATA4, EID0_DATA4);//姿勢制御アクチュエータの温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA5, SIDL_W, EID8_DATA5, EID0_DATA5);//通信機の温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA6, SIDL_W, EID8_DATA6, EID0_DATA6);//ミッション機器の温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-                
-                cnt = 0;
-            }
+            mode = _ChargeMode;
+            
+            Write(_TXB0DLC, 0b00000001);                                            //メッセージサイズ1byte
+            Load_TX_ID(_F_TXB0SIDH, SIDH_MODE, SIDL_W, EID8_MODE, EID0_MODE);       //モード書き込みIDの設定
+            Load_TX_Data(_F_TXB0D0, 1, &mode);                                      //モード書き込み
+            RTS0(_CAN_BAUDRATE);                                                    //送信要求
+            
+            RB5 = 0;
+            RB6 = 0;
+            RB7 = 1;
         }
         
-        /* 通信モード */
-        if(mode == _COMMMode)
+        if(cnt == 50)
         {
-            if(cnt >= 10)
-            {
-                Write(_TXB0DLC , 0b00000001);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_MODE, SIDL_R, 0, 0);                   //モードフラグ読み出し
-                Load_TX_Data(_F_TXB0D0, 1, 0);                                      //読み出しだから，1byteの空データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00000001);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_MODE, SIDL_W, EID8_MODE, EID0_MODE);   //モード書き込みIDの設定
-                Load_TX_Data(_F_TXB0D0, 1, &mode);                                  //モード書き込み
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA1, SIDL_W, EID8_DATA1, EID0_DATA1);//バッテリーの温度値書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA2, SIDL_W, EID8_DATA2, EID0_DATA2);//メモリの温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA3, SIDL_W, EID8_DATA3, EID0_DATA3); //姿勢センサの温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA4, SIDL_W, EID8_DATA4, EID0_DATA4);//姿勢制御アクチュエータの温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA5, SIDL_W, EID8_DATA5, EID0_DATA5);//通信機の温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA6, SIDL_W, EID8_DATA6, EID0_DATA6);//ミッション機器の温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-                
-                cnt = 0;
-            }
+            mode = _COMMMode;
+            
+            Write(_TXB0DLC, 0b00000001);                                            //メッセージサイズ1byte
+            Load_TX_ID(_F_TXB0SIDH, SIDH_MODE, SIDL_W, EID8_MODE, EID0_MODE);       //モード書き込みIDの設定
+            Load_TX_Data(_F_TXB0D0, 1, &mode);                                      //モード書き込み
+            RTS0(_CAN_BAUDRATE);                                                    //送信要求
+            
+            RB5 = 0;
+            RB6 = 1;
+            RB7 = 0;
         }
         
-        /* 待機モード */
-        if(mode == _StanbyMode)
+        if(cnt == 100)
         {
-            if(cnt >= 10)
-            {
-                Write(_TXB0DLC , 0b00000001);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_MODE, SIDL_R, 0, 0);                   //モードフラグ読み出し
-                Load_TX_Data(_F_TXB0D0, 1, 0);                                      //読み出しだから，1byteの空データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00000001);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_MODE, SIDL_W, EID8_MODE, EID0_MODE);   //モード書き込みIDの設定
-                Load_TX_Data(_F_TXB0D0, 1, &mode);                                  //モード書き込み
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA1, SIDL_W, EID8_DATA1, EID0_DATA1);//バッテリーの温度値書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA2, SIDL_W, EID8_DATA2, EID0_DATA2);//メモリの温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA3, SIDL_W, EID8_DATA3, EID0_DATA3); //姿勢センサの温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA4, SIDL_W, EID8_DATA4, EID0_DATA4);//姿勢制御アクチュエータの温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA5, SIDL_W, EID8_DATA5, EID0_DATA5);//通信機の温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA6, SIDL_W, EID8_DATA6, EID0_DATA6);//ミッション機器の温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-                
-                cnt = 0;
-            }
+            mode = _StanbyMode;
+            
+            Write(_TXB0DLC, 0b00000001);                                            //メッセージサイズ1byte
+            Load_TX_ID(_F_TXB0SIDH, SIDH_MODE, SIDL_W, EID8_MODE, EID0_MODE);       //モード書き込みIDの設定
+            Load_TX_Data(_F_TXB0D0, 1, &mode);                                      //モード書き込み
+            RTS0(_CAN_BAUDRATE);                                                    //送信要求
+            
+            RB5 = 1;
+            RB6 = 0;
+            RB7 = 0;
         }
         
-        /* ミッションモード */
-        if(mode == _MissionMode)
-        {   
-            if(cnt >= 10)
-            {
-                Write(_TXB0DLC , 0b00000001);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_MODE, SIDL_R, 0, 0);                   //モードフラグ読み出し
-                Load_TX_Data(_F_TXB0D0, 1, 0);                                      //読み出しだから，1byteの空データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00000001);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_MODE, SIDL_W, EID8_MODE, EID0_MODE);   //モード書き込みIDの設定
-                Load_TX_Data(_F_TXB0D0, 1, &mode);                                  //モード書き込み
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA1, SIDL_W, EID8_DATA1, EID0_DATA1);//バッテリーの温度値書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA2, SIDL_W, EID8_DATA2, EID0_DATA2);//メモリの温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA3, SIDL_W, EID8_DATA3, EID0_DATA3); //姿勢センサの温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA4, SIDL_W, EID8_DATA4, EID0_DATA4);//姿勢制御アクチュエータの温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA5, SIDL_W, EID8_DATA5, EID0_DATA5);//通信機の温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-
-                Write(_TXB0DLC , 0b00001000);                                       //メッセージサイズ1byte
-                Load_TX_ID(_F_TXB0SIDH, SIDH_DATA6, SIDL_W, EID8_DATA6, EID0_DATA6);//ミッション機器の温度書き込み
-                Load_TX_Data(_F_TXB0D0, 8, data);                                   //データ
-                RTS0(_CAN_BAUDRATE);                                                //送信要求
-                
-                cnt = 0;
-            }
+        if(cnt == 150)
+        {
+            mode = _MissionMode;
+            
+            Write(_TXB0DLC, 0b00000001);                                            //メッセージサイズ1byte
+            Load_TX_ID(_F_TXB0SIDH, SIDH_MODE, SIDL_W, EID8_MODE, EID0_MODE);       //モード書き込みIDの設定
+            Load_TX_Data(_F_TXB0D0, 1, &mode);                                      //モード書き込み
+            RTS0(_CAN_BAUDRATE);                                                    //送信要求
+            
+            RB5 = 0;
+            RB6 = 0;
+            RB7 = 0;
+        }
+        
+        if(cnt == 200)
+        {
+            cnt = 0;
         }
     }
 }
@@ -329,14 +148,6 @@ void CONFIG()
     
     MCP2515_init(_CAN_BAUDRATE);                                                //とりあえず，動作している2にした．理解はまだ
     Write(_TXB0DLC , 0b00000001);                                               //メッセージサイズ8byte
-    Write(_RXM0SIDH, 0b11111111);                                               //マスク設定上位全一致
-    Write(_RXM0SIDL, 0b11111111);                                               //マスク設定下位全一致
-    Write(_RXM0EID8, 0b11111111);                                               //マスク設定拡張上位全一致
-    Write(_RXM0EID0, 0b11110000);                                               //マスク設定拡張下位上位4bit一致
-    Write(_RXF0SIDH, 0b00000000);                                               //受信フィルタ上位ビットの設定
-    Write(_RXF0SIDL, 0b00001000);                                               //受信フィルタ下位ビットの設定
-    Write(_RXF0EID8, 0b00000000);                                               //受信フィルタ拡張上位ビットの設定
-    Write(_RXF0EID0, Sub_Filt);                                                 //受信フィルタ拡張下位ビットの設定
     MCP2515_Open(0);                                                            //とりあえず，0にした．理解はまだ
 }
 
@@ -375,4 +186,3 @@ char BtoD(char data)
     
     return decimal;
 }
-
